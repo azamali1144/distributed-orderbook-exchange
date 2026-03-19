@@ -1,111 +1,110 @@
 'use strict'
 
-const crypto = require('crypto')
-const { SIDES } = require('./constants')
+const crypto = require('crypto');
+const { SIDES } = require('./constants');
 
+// Maintains an in-memory order book per trading symbol.
+    // - BUY  orders match against the lowest ASK first
+    // - SELL orders match against the highest BID first
 class MatchingEngine {
     constructor() {
-        this.books = {}          // { 'BTC/USD': { bids: [], asks: [] } }
+        // { 'BTC/USD': { bids: [], asks: [] } }
+        this.books = {}
         this.lastUpdatedAt = null
-    }
+    };
 
-    initPair(symbol) {
-        if (!this.books[symbol]) {
-            this.books[symbol] = { bids: [], asks: [] }
-        }
-    }
-
+     //Process an incoming order:
+     // 1. Match against the opposite side of the book
+     // 2. Add any remainder back to the book
     processOrder(order) {
-        const { symbol } = order
-        this.initPair(symbol)
+        const { symbol } = order;
+        this.initPair(symbol);
 
-        const book = this.books[symbol]
+        const book   = this.books[symbol];
+        const trades = this.match(order, book);
 
-        // Step 1: Match taker against the existing book
-        const trades = this.match(order, book)
-
-        // Step 2: If remainder exists after matching, add to book
+        // Add remainder back to the book
         if (order.amount > 0) {
-            this.addOrderToBook(order, book)
+            this.addToBook(order, book);
         }
 
-        // Step 3: Update the timestamp for state sync
-        this.lastUpdatedAt = Date.now()
-
-        return { trades, remainder: order.amount }
-    }
-
-    match(takerOrder, book) {
-        const trades = []
-
-        // Taker is BUY → match against lowest ASKs
-        // Taker is SELL → match against highest BIDs
-        const makers = takerOrder.side === SIDES.BUY
-            ? book.asks
-            : book.bids
-
-        while (makers.length > 0 && takerOrder.amount > 0) {
-            const maker = makers[0]
-
-            // Check price crossings
-            const isMatch = takerOrder.side === SIDES.BUY
-                ? takerOrder.price >= maker.price
-                : takerOrder.price <= maker.price
-
-            if (!isMatch) break
-
-            const fillAmount = Math.min(takerOrder.amount, maker.amount)
-
-            trades.push({
-                tradeId:  crypto.randomBytes(4).toString('hex'),
-                price:    maker.price,
-                amount:   fillAmount,
-                makerId:  maker.id,
-                takerId:  takerOrder.id,
-                symbol:   takerOrder.symbol,
-                matchedAt: Date.now()
-            })
-
-            takerOrder.amount -= fillAmount
-            maker.amount     -= fillAmount
-
-            // Remove fully filled maker
-            if (maker.amount <= 0) makers.shift()
-        }
-
-        return trades
-    }
-
-    addOrderToBook(order, book) {
-        const list = order.side === SIDES.BUY ? book.bids : book.asks
-
-        // Avoid duplicates
-        const exists = list.find(o => o.id === order.id)
-        if (exists) return
-
-        list.push({ ...order })
-
-        // Sort: Bids (High to Low), Asks (Low to High). Secondary sort by Timestamp.
-        list.sort((a, b) => {
-            if (order.side === SIDES.BUY) {
-                return b.price - a.price || a.timestamp - b.timestamp
-            }
-            return a.price - b.price || a.timestamp - b.timestamp
-        })
+        this.lastUpdatedAt = Date.now();
+        return { trades, remainder: order.amount };
     }
 
     getState() {
         return {
-            books: this.books,
+            books:         this.books,
             lastUpdatedAt: this.lastUpdatedAt
-        }
+        };
     }
 
     setState(state) {
         if (!state) return
-        this.books = state.books || {}
-        this.lastUpdatedAt = state.lastUpdatedAt || Date.now()
-        console.log('[Engine] State applied from network snapshot')
+        this.books         = state.books         || {};
+        this.lastUpdatedAt = state.lastUpdatedAt || null;
+    }
+
+    initPair(symbol) {
+        if (!this.books[symbol]) {
+            this.books[symbol] = { bids: [], asks: [] };
+        }
+    }
+
+    // Core matching loop — Price-Time Priority
+    match(takerOrder, book) {
+        const trades = [];
+
+        // A BUY taker hits the ASK side (lowest ask first)
+        // A SELL taker hits the BID side (highest bid first)
+        const makers = takerOrder.side === SIDES.BUY
+            ? book.asks
+            : book.bids;
+
+        while (makers.length > 0 && takerOrder.amount > 0) {
+            const maker = makers[0];
+
+            // Price crossing check
+            const crossed = takerOrder.side === SIDES.BUY
+                ? takerOrder.price >= maker.price
+                : takerOrder.price <= maker.price;
+
+            if (!crossed) break;
+
+            const filled = Math.min(takerOrder.amount, maker.amount);
+
+            trades.push({
+                tradeId:   crypto.randomBytes(4).toString('hex'),
+                symbol:    takerOrder.symbol,
+                price:     maker.price,
+                amount:    filled,
+                takerId:   takerOrder.id,
+                makerId:   maker.id,
+                timestamp: Date.now()
+            });
+
+            takerOrder.amount -= filled;
+            maker.amount      -= filled;
+
+            if (maker.amount <= 0) makers.shift();
+        }
+
+        return trades;
+    }
+
+    //Add a (possibly partial) order to the correct side of the book. Maintains Price-Time Priority sort order.
+    addToBook(order, book) {
+        const list = order.side === SIDES.BUY ? book.bids : book.asks;
+
+        if (list.find(o => o.id === order.id)) return;
+
+        list.push({ ...order });
+
+        if (order.side === SIDES.BUY) {
+            list.sort((a, b) => b.price - a.price || a.timestamp - b.timestamp);
+        } else {
+            list.sort((a, b) => a.price - b.price || a.timestamp - b.timestamp);
+        }
     }
 }
 

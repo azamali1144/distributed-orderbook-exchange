@@ -1,74 +1,71 @@
 'use strict'
 
 require('dotenv').config();
+
+const { PeerRPCClient } = require('grenache-nodejs-http');
+const Link   = require('grenache-nodejs-link');
 const crypto = require('crypto');
-const Link = require('grenache-nodejs-link');
-const { PeerRPCClient } = require('grenache-nodejs-ws');
-const {SERVICE_BASE_NAME} = require("./src/constants");
 
-class OrderBookClient {
-    constructor(config) {
-        this.lnk = new Link({ grape: config.grape, timeout: config.timeout });
-        this.peerRpcClient = new PeerRPCClient(this.lnk, {});
+const { ORDER_BOOK_SERVICE, DEFAULT_GRAPE } = require('./src/constants');
 
-        // Parse command line args
-        const [symbol, price, amount, side] = process.argv.slice(2);
+// Example: node client.js BTC/USD 50000 1.5 buy
+const [symbol, price, amount, side] = process.argv.slice(2);
 
-        this.order = {
-            id: crypto.randomBytes(8).toString('hex'),
-            symbol: symbol || 'BTC/USD',
-            price: parseFloat(price) || 50000,
-            amount: parseFloat(amount) || 0.1,
-            side: side || 'buy',
-            timestamp: Date.now()
-        };
-    }
-
-    init() {
-        this.lnk.start();
-        this.peerRpcClient.init();
-
-        // Submit order
-        setTimeout(() => {
-            console.log(`\n[Client] Submitting: ${this.order.side.toUpperCase()} ${this.order.amount} ${this.order.symbol} @ $${this.order.price}\n`);
-            this.submitOrder(this.order);
-        }, 1500);
-    }
-
-    submitOrder(order) {
-        console.log(`[Client] Looking for available peers...`);
-
-        this.peerRpcClient.request(SERVICE_BASE_NAME, order, { timeout: parseInt(process.env.ORDER_BOOK_SERVICE_TIMEOUT) || 10000 }, (err, result) => {
-                if (err) {
-                    if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') {
-                        console.error('[Error] No peers online. Retrying in 2 seconds...');
-                        setTimeout(() => this.submitOrder(order), 2000);
-                        return;
-                    }
-
-                    if (err.code === 'ECONNREFUSED' || err.message === 'ERR_TIMEOUT') {
-                        console.warn('[Retry] Peer unreachable. Trying another...');
-                        this.submitOrder(order);
-                        return;
-                    }
-
-                    console.error('[Error] Order submission failed:', err.message);
-                    return;
-                }
-
-                console.log(`[Success] Order accepted!`);
-                console.log(`result: ${JSON.stringify(result, null, 2)}`);
-                console.log(`Peer: ${result.peer}`);
-                console.log(`Matches: ${result.matches}\n`);
-            }
-        );
-    }
-
+const order = {
+    id: crypto.randomBytes(8).toString('hex'),
+    symbol: symbol || 'BTC/USD',
+    price: parseFloat(price) || 50000,
+    amount: parseFloat(amount) || 1.0,
+    side: (side || 'buy').toLowerCase(),
+    timestamp: Date.now()
 }
 
-const client = new OrderBookClient({
-    grape: `${process.env.GRPES_BASE_URL}:${process.env.GRPES_PORT}`,
-    timeout: parseInt(process.env.GRPES_TIMEOUT)
-});
+// The client does NOT look up a random peer in the DHT.
+// It connects directly to the RPC port of its own local node.
+// Connect to OWN local node
+const ownNodePort = parseInt(process.env.OWN_NODE_PORT);
 
-client.init();
+if (!ownNodePort) {
+    console.error('Error: OWN_NODE_PORT is not set in .env');
+    console.error('Set it to the RPC port printed when you started your node.');
+    process.exit(1);
+}
+
+const link = new Link({ grape: process.env.GRAPE_URL || DEFAULT_GRAPE });
+link.start();
+
+const peer = new PeerRPCClient(link, {});
+peer.init();
+
+console.log('\n Client');
+console.log(`Client - Submitting order to OWN node at port ${ownNodePort}`);
+console.log(`Client - Symbol: ${order.symbol}`);
+console.log(`Client - Side: ${order.side.toUpperCase()}`);
+console.log(`Client - Amoun: ${order.amount}`);
+console.log(`Client - Price: $${order.price}`);
+console.log(`Client - Order IDD: ${order.id}`);
+console.log('\n Client');
+
+// Direct request to own node's RPC port
+peer.request(ORDER_BOOK_SERVICE, order, { timeout: 10000 }, (err, result) => {
+    if (err) {
+        console.error('Client - Order submission failed:', err.message);
+        process.exit(1);
+    }
+
+    console.log('Client - Order accepted by own node!');
+    console.log(`Client - Status: ${result.status}`);
+    console.log(`Client - Order ID: ${result.id}`);
+    console.log(`Client - Node ID: ${result.nodeId}`);
+    console.log(`Client - Trades: ${result.trades.length}`);
+
+    if (result.trades.length > 0) {
+        result.trades.forEach((t, i) => {
+            console.log(`Client - Trade ${i + 1} | ${t.amount} ${t.symbol} @ $${t.price} | ID: ${t.tradeId}`);
+        });
+    } else {
+        console.log(`Client - Remainder : ${result.remainder} added to book`);
+    }
+
+    process.exit(0);
+});
