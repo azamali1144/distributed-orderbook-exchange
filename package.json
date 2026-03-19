@@ -1,0 +1,14 @@
+{
+  "name": "distributed-orderbook-exchange",
+  "version": "1.0.0",
+  "description": "A distributed P2P orderbook exchange built with Grenache",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "grenache-nodejs-link": "^1.0.2",
+    "grenache-nodejs-ws": "^1.0.0",
+    "dotenv": "^16.0.3"
+  }
+}
