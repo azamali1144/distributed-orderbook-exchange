@@ -19,11 +19,7 @@ const MatchingEngine = require('./engine');
 
 class OrderBookPeer {
     constructor(config) {
-        this.config = config;
-
         this.lnk = new Link({ grape: config.grape });
-        this.rpcServer = new PeerRPCServer(this.lnk, {});
-        this.peerRpcClient = new PeerRPCClient(this.lnk, {});
 
         this.peerSub = new PeerSub(this.lnk, {});
         this.peerPub = new PeerPub(this.lnk, {});
@@ -48,7 +44,7 @@ class OrderBookPeer {
 
     init() {
         this.lnk.start();
-        [this.rpcServer, this.peerPub, this.peerSub, this.peerRpcClient].forEach(p => p.init());
+        [this.peerRpcServer, this.peerPub, this.peerSub, this.peerRpcClient].forEach(p => p.init());
 
         this.setupTransports();
         this.setupSubscriptions();
@@ -58,6 +54,43 @@ class OrderBookPeer {
         // Bootstrap after DHT registration
         setTimeout(() => this.bootstrap(), 2000);
         console.log(`[Peer ${this.peerId}] Running on RPC: ${this.ports.rpc}\n`);
+    }
+
+    // Bootstrap with state sync
+    bootstrap() {
+        console.log(`[Bootstrap] Looking up peers for state sync...`);
+
+        this.peerRpcClient.request(ORDER_BOOK_SYNC, { requester: this.peerId }, {
+            timeout: parseInt(process.env.ORDER_BOOK_SYNC_TIMEOUT) || 10000
+        }, (err, networkState) => {
+            if (err) {
+                if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') {
+                    console.log('[Bootstrap] No peers found - starting as Genesis node');
+                } else {
+                    console.error('[Bootstrap] Sync failed:', err.message);
+                }
+                return;
+            }
+
+            if (networkState && this.isNetworkStateNewer(networkState)) {
+                console.log('[Bootstrap] Applying network state snapshot', networkState);
+                this.engine.setState(networkState);
+                console.log('[Bootstrap] State synchronized\n');
+            }
+        });
+    }
+
+    isNetworkStateNewer(networkState) {
+        if (!networkState || !networkState.lastUpdatedAt) return false;
+
+        const isMoreRecent = networkState.lastUpdatedAt > this.engine.lastUpdatedAt;
+
+        const localSize = JSON.stringify(this.engine.books).length;
+        const networkSize = JSON.stringify(networkState.books || {}).length;
+        const isLarger = networkState.lastUpdatedAt === this.engine.lastUpdatedAt &&
+            networkSize > localSize;
+
+        return isMoreRecent || isLarger;
     }
 
     setupTransports() {
@@ -74,7 +107,7 @@ class OrderBookPeer {
             console.log(`[Client] Req ${rid} for event: ${key}`);
 
             if (key === SERVICE_BASE_NAME) {
-                this.handleOrder(payload, true); // true = from local client
+                const trades = this.handleOrder(payload, true); // true = from local client
                 return handler.reply(null, {status: 'PROCESSED', matches: trades.length, peer: this.peerId});
             }
 
@@ -140,44 +173,6 @@ class OrderBookPeer {
             if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') return;
             console.error('[Discovery] Error:', err.message);
         });
-    }
-
-
-    // Bootstrap with state sync
-    bootstrap() {
-        console.log(`[Bootstrap] Looking up peers for state sync...`);
-
-        this.peerRpcClient.request(ORDER_BOOK_SYNC, { requester: this.peerId }, {
-            timeout: parseInt(process.env.ORDER_BOOK_SYNC_TIMEOUT) || 10000
-        }, (err, networkState) => {
-            if (err) {
-                if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') {
-                    console.log('[Bootstrap] No peers found - starting as Genesis node');
-                } else {
-                    console.error('[Bootstrap] Sync failed:', err.message);
-                }
-                return;
-            }
-
-            if (networkState && this.isNetworkStateNewer(networkState)) {
-                console.log('[Bootstrap] Applying network state snapshot', networkState);
-                this.engine.setState(networkState);
-                console.log('[Bootstrap] State synchronized\n');
-            }
-        });
-    }
-
-    isNetworkStateNewer(networkState) {
-        if (!networkState || !networkState.lastUpdatedAt) return false;
-
-        const isMoreRecent = networkState.lastUpdatedAt > this.engine.lastUpdatedAt;
-
-        const localSize = JSON.stringify(this.engine.books).length;
-        const networkSize = JSON.stringify(networkState.books || {}).length;
-        const isLarger = networkState.lastUpdatedAt === this.engine.lastUpdatedAt &&
-            networkSize > localSize;
-
-        return isMoreRecent || isLarger;
     }
 
     // Graceful Shutdown

@@ -1,52 +1,53 @@
 'use strict'
 
-const crypto = require('crypto');
-const { SIDES } = require('./constants');
+const crypto = require('crypto')
+const { SIDES } = require('./constants')
 
 class MatchingEngine {
     constructor() {
-        this.books = {} // Format: { 'BTC/USD': { bids: [], asks: [] } }
+        this.books = {}          // { 'BTC/USD': { bids: [], asks: [] } }
+        this.lastUpdatedAt = null
     }
 
     initPair(symbol) {
         if (!this.books[symbol]) {
-            this.books[symbol] = { asks: [], bids: [] };
+            this.books[symbol] = { bids: [], asks: [] }
         }
     }
 
-    // Add order and trigger matching
     processOrder(order) {
-        const { symbol, side } = order;
-        this.initPair(symbol);
+        const { symbol } = order
+        this.initPair(symbol)
 
-        const book = this.books[symbol];
-        console.log('book', JSON.stringify(book));
+        const book = this.books[symbol]
 
-        if (side === SIDES.SELL) {
-            this.books[symbol].asks.push({ ...order });
-            this.books[symbol].asks.sort((a, b) => a.price - b.price || a.timestamp - b.timestamp);
-        } else {
-            this.books[symbol].bids.push({ ...order });
-            this.books[symbol].bids.sort((a, b) => b.price - a.price || a.timestamp - b.timestamp);
-        }
-        console.log('book after', JSON.stringify(this.books[symbol]));
+        // Step 1: Match taker against the existing book
+        const trades = this.match(order, book)
 
-        // FIX: Call match and return the result
-        const trades = this.match(symbol);
-        // If there is a remainder after matching, add it to the book
+        // Step 2: If remainder exists after matching, add to book
         if (order.amount > 0) {
             this.addOrderToBook(order, book)
         }
+
+        // Step 3: Update the timestamp for state sync
+        this.lastUpdatedAt = Date.now()
 
         return { trades, remainder: order.amount }
     }
 
     match(takerOrder, book) {
         const trades = []
-        const makers = takerOrder.side === SIDES.BUY ? book.asks : book.bids
+
+        // Taker is BUY → match against lowest ASKs
+        // Taker is SELL → match against highest BIDs
+        const makers = takerOrder.side === SIDES.BUY
+            ? book.asks
+            : book.bids
 
         while (makers.length > 0 && takerOrder.amount > 0) {
             const maker = makers[0]
+
+            // Check price crossings
             const isMatch = takerOrder.side === SIDES.BUY
                 ? takerOrder.price >= maker.price
                 : takerOrder.price <= maker.price
@@ -56,27 +57,39 @@ class MatchingEngine {
             const fillAmount = Math.min(takerOrder.amount, maker.amount)
 
             trades.push({
-                tradeId: crypto.randomBytes(4).toString('hex'),
-                price: maker.price,
-                amount: fillAmount,
-                makerId: maker.id,
-                takerId: takerOrder.id
-            });
+                tradeId:  crypto.randomBytes(4).toString('hex'),
+                price:    maker.price,
+                amount:   fillAmount,
+                makerId:  maker.id,
+                takerId:  takerOrder.id,
+                symbol:   takerOrder.symbol,
+                matchedAt: Date.now()
+            })
 
             takerOrder.amount -= fillAmount
-            maker.amount -= fillAmount
+            maker.amount     -= fillAmount
 
-            if (maker.amount <= 0) makers.shift() // Remove filled maker
+            // Remove fully filled maker
+            if (maker.amount <= 0) makers.shift()
         }
+
         return trades
     }
 
     addOrderToBook(order, book) {
         const list = order.side === SIDES.BUY ? book.bids : book.asks
-        list.push(order)
+
+        // Avoid duplicates
+        const exists = list.find(o => o.id === order.id)
+        if (exists) return
+
+        list.push({ ...order })
+
         // Sort: Bids (High to Low), Asks (Low to High). Secondary sort by Timestamp.
         list.sort((a, b) => {
-            if (order.side === SIDES.BUY) return b.price - a.price || a.timestamp - b.timestamp
+            if (order.side === SIDES.BUY) {
+                return b.price - a.price || a.timestamp - b.timestamp
+            }
             return a.price - b.price || a.timestamp - b.timestamp
         })
     }
@@ -85,14 +98,14 @@ class MatchingEngine {
         return {
             books: this.books,
             lastUpdatedAt: this.lastUpdatedAt
-        };
+        }
     }
 
     setState(state) {
-        console.log('setState - state: ', state);
-        if (!state) return;
-        this.books = state.books || {};
-        this.lastUpdatedAt = state.lastUpdatedAt || Date.now();
+        if (!state) return
+        this.books = state.books || {}
+        this.lastUpdatedAt = state.lastUpdatedAt || Date.now()
+        console.log('[Engine] State applied from network snapshot')
     }
 }
 

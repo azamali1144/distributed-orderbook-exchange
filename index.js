@@ -1,28 +1,36 @@
 'use strict'
 
+// Only suppress known safe errors, let real ones crash
 process.on('uncaughtException', (err) => {
-    if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') return;
-    console.error('[Fatal]', err);
-    process.exit(1);
-});
+    const safeErrors = [
+        'ERR_GRAPE_LOOKUP_EMPTY',
+        'ECONNREFUSED'
+    ]
+    if (safeErrors.some(e => err.message?.includes(e) || err.code?.includes(e))) return
+    console.error('[Fatal] Unhandled exception:', err)
+    process.exit(1)
+})
 
 require('dotenv').config()
+
 const OrderBookPeer = require('./src/peer')
 const { DEFAULT_GRAPE } = require('./src/constants')
 
-const peer = new OrderBookPeer({
-    grape: `${process.env.GRPES_BASE_URL}:${process.env.GRPES_PORT}` || DEFAULT_GRAPE,
-    timeout: parseInt(process.env.GRPES_TIMEOUT)
-});
+const grapeUrl = `${process.env.GRPES_BASE_URL}:${process.env.GRPES_PORT}` || DEFAULT_GRAPE
 
-peer.init();
+const peer = new OrderBookPeer({
+    grape:   grapeUrl,
+    timeout: parseInt(process.env.GRPES_TIMEOUT) || 5000
+})
+
+peer.init()
 
 process.on('SIGINT', () => {
-    console.log('\n[Main] SIGINT - shutting down gracefully...');
-    peer.stop();
-});
+    console.log('\n[Main] SIGINT received...')
+    peer.stop()
+})
 
 process.on('SIGTERM', () => {
-    console.log('[Main] SIGTERM - shutting down gracefully...');
-    peer.stop();
-});
+    console.log('[Main] SIGTERM received...')
+    peer.stop()
+})
