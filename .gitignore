@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment / Secrets
+.env
+.env.test
+.env.production
+
+# Local Data (If you added any filesystem persistence)
+data/
+*.db
+logs/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Testing / Coverage
+coverage/
+.nyc_output/
+
+# Build / Dist (If using TypeScript or Babel)
+dist/
+build/
