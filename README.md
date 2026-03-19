@@ -9,16 +9,29 @@ the order, then gossips it to every other node on the network — keeping all or
 
 ## Features
 
-| Feature | Detail |
-|---|---|
-| **Own Order Book per Instance** | Every `node index.js` process runs its own `MatchingEngine` |
-| **Client Submits to Own Node** | `client.js` uses `OWN_NODE_PORT` to target its local node only |
-| **P2P Order Distribution** | `link.lookup()` finds all peers and pushes orders directly via RPC |
-| **Price-Time Priority Matching** | Best price matched first; ties broken by earliest timestamp |
-| **Partial Fill + Remainder** | Unmatched quantity is automatically added back to the order book |
-| **Idempotency / Deduplication** | In-memory `Set` of processed order IDs prevents double-processing |
-| **In-Memory Only** | Zero database or filesystem dependency |
-| **Graceful Shutdown** | `SIGINT` / `SIGTERM` cleanly close transports and clear intervals |
+**Own Order Book per Instance**
+Every `node index.js` process maintains its own `MatchingEngine` with an independent in-memory order book.
+
+**Client Submits to Own Node**
+`client.js` uses `OWN_NODE_PORT` to connect directly to its local node, never to a remote peer.
+
+**P2P Gossip Distribution**
+After local processing, the node calls `link.lookup()` to find all live peers and pushes the order to each one via RPC.
+
+**Price-Time Priority Matching**
+Best price executes first. Ties are broken by the earliest timestamp — the standard exchange matching algorithm.
+
+**Partial Fill + Remainder**
+Unmatched quantity is automatically added back to the local order book after matching.
+
+**Idempotency / Deduplication**
+An in-memory `Set` of processed order IDs prevents the same order from being processed twice when it arrives via gossip.
+
+**In-Memory Only**
+Zero database or filesystem dependency, fully compliant with the challenge constraints.
+
+**Graceful Shutdown**
+`SIGINT` / `SIGTERM` cleanly clear intervals and stop all transports before the process exits.
 
 ---
 
@@ -230,24 +243,31 @@ State: Empty order book
 
 ---
 
-## Limitations & Improvements
+## Limitations & Future Improvements
 
-Given the 6–8 hour constraint, the following are known limitations:
+As noted in the challenge: *"we know it's probably not possible to complete the task 100% in the given time."*
 
-| Limitation | How to Solve with More Time |
-|---|---|
-| **Race conditions** on simultaneous orders | Implement a per-symbol async queue (e.g. `async` library) to serialize order processing |
-| **State sync on new node join** | Add a bootstrap RPC call to request a full order book snapshot from an existing peer |
-| **No order cancellation** | Add a `CANCEL` order type handled by the engine and gossiped to peers |
-| **No persistence** | Acceptable per spec, but could add optional snapshotting to recover after crash |
-| **Gossip is direct RPC** | Could switch to a true Pub/Sub pattern using `grenache-nodejs-ws` for lower coupling |
-| **No authentication** | Orders are trusted as-is; a real system would require signing |
+The following limitations are acknowledged:
+
+**Race conditions on concurrent orders**
+When two nodes receive conflicting orders at exactly the same moment, their books can diverge temporarily. The fix is to serialize order processing per symbol using an async queue — for example `async.queue` from the `async` library, which is specifically hinted at in the challenge tips.
+
+**No state bootstrap for new nodes**
+A node joining an already-active network starts with an empty order book. The solution is to perform an RPC request on startup to a known peer, fetching a full order book snapshot before announcing to the DHT.
+
+**Gossip delivery not guaranteed**
+If a peer is temporarily unreachable, the gossiped order is lost silently. This can be addressed with acknowledgement and retry logic, or by switching to a Pub/Sub pattern using `grenache-nodejs-ws` for more resilient delivery.
+
+**No order cancellation**
+There is no mechanism to remove a resting order from the book. This would require adding a `CANCEL` action type, handled by the engine and gossiped to all peers the same way new orders are.
+
+**No order validation**
+Orders are processed as received. A production system would validate that `price > 0`, `amount > 0`, `symbol` is a recognised pair, and `side` is either `buy` or `sell` before touching the engine.
+
+**processedOrders Set grows forever**
+The in-memory deduplication `Set` is never pruned. Under sustained load this would grow without bound. The fix is a TTL-based eviction strategy, removing entries older than a sliding time window.
+
+**No authentication or signing**
+Orders are trusted as-is with no verification of origin. A production system would require each order to be cryptographically signed, with the node verifying the signature before processing.
 
 ---
-
-
-Install with:
-
-```bash  
-npm install  
-```
