@@ -7,8 +7,9 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "crypto": "^1.0.1",
+    "dotenv": "^16.0.3",
     "grenache-nodejs-link": "^1.0.2",
-    "grenache-nodejs-ws": "^1.0.0",
-    "dotenv": "^16.0.3"
+    "grenache-nodejs-ws": "^1.0.0"
   }
 }

@@ -2,7 +2,8 @@
 
 const { PeerRPCServer, PeerPub, PeerSub } = require('grenache-nodejs-ws')
 const Link = require('grenache-nodejs-link')
-const { ORDER_BOOK_RPC, ORDER_BOOK_TOPIC } = require('./constants')
+const MatchingEngine = require('./engine')
+const { ORDER_BOOK_RPC, ORDER_BOOK_GOSSIP } = require('./constants')
 
 class OrderBookPeer {
     constructor(config) {
@@ -12,7 +13,7 @@ class OrderBookPeer {
         this.pub = new PeerPub(this.lnk, {})
         this.sub = new PeerSub(this.lnk, {})
 
-        // Track processed orders to avoid infinite gossip loops
+        this.engine = new MatchingEngine()
         this.processedOrders = new Set()
     }
 
@@ -22,54 +23,50 @@ class OrderBookPeer {
         this.pub.init()
         this.sub.init()
 
-        // 1. Setup RPC Server to listen for Client orders
         const transport = this.rpcServer.transport('server')
         transport.listen(this.config.rpcPort)
 
-        // 2. Setup Pub/Sub (Gossip)
-        // We listen for orders being broadcast by other peers
-        this.sub.sub(ORDER_BOOK_TOPIC)
+        // Listen for Gossip from other peers
+        this.sub.sub(ORDER_BOOK_GOSSIP)
         this.sub.on('message', (msg) => {
             try {
-                const order = JSON.parse(msg)
-                this.handleIncomingOrder(order, false) // false = from network
-            } catch (e) {
-                console.error('Error parsing gossip message', e)
-            }
+                this.handleOrder(JSON.parse(msg), false)
+            } catch (e) { console.error('Gossip parse error', e) }
         })
 
-        // 3. Announce RPC service to Grape
-        setInterval(() => {
-            this.lnk.announce(ORDER_BOOK_RPC, transport.port, (err) => {
-                if (err) console.error('Announcement failed:', err)
-            })
-        }, 1000)
-
-        // 4. Handle Client Requests
+        // Handle Direct Client RPC
         transport.on('request', (rid, key, payload, handler) => {
             if (key === ORDER_BOOK_RPC) {
-                this.handleIncomingOrder(payload, true) // true = from local client
+                this.handleOrder(payload, true)
                 handler.reply(null, { status: 'ACCEPTED', id: payload.id })
             }
         })
 
-        console.log(`Node initialized on port ${this.config.rpcPort}`)
+        // Announce service
+        setInterval(() => {
+            this.lnk.announce(ORDER_BOOK_RPC, transport.port, (err) => {
+                if (err) console.error('Announce failed', err)
+            })
+        }, 1000)
+
+        console.log(`Node running on port ${this.config.rpcPort}`)
     }
 
-    handleIncomingOrder(order, isLocal) {
-        // Prevent processing the same order twice
+    handleOrder(order, isLocal) {
         if (this.processedOrders.has(order.id)) return
         this.processedOrders.add(order.id)
 
-        console.log(`[${isLocal ? 'CLIENT' : 'NETWORK'}] Processing order:`, order.id)
+        console.log(`[${isLocal ? 'LOCAL' : 'GOSSIP'}] Processing ${order.side} ${order.amount} @ ${order.price}`)
 
-        // If it came from our client, we must broadcast it to the rest of the P2P network
-        if (isLocal) {
-            console.log(`Broadcasting order ${order.id} to peers...`)
-            this.pub.pub(JSON.stringify(order))
+        const result = this.engine.processOrder(order)
+
+        if (result.trades.length > 0) {
+            console.log(`   ✅ Matched ${result.trades.length} trades!`)
         }
 
-        // NEXT STEP: This is where we will call this.engine.processOrder(order)
+        if (isLocal) {
+            this.pub.pub(JSON.stringify(order))
+        }
     }
 }
 

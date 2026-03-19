@@ -1,36 +1,33 @@
-const { PeerRPCClient } = require('grenache-nodejs-ws');
-const Link = require('grenache-nodejs-link');
+'use strict'
+
+const { PeerRPCClient } = require('grenache-nodejs-ws')
+const Link = require('grenache-nodejs-link')
 const crypto = require('crypto')
+const { ORDER_BOOK_RPC } = require('./src/constants')
 
-const GRAPE_URL = 'http://127.0.0.1:30001'
-
-const link = new Link({ grape: GRAPE_URL })
+const link = new Link({ grape: 'http://127.0.0.1:30001' })
 link.start()
 
 const peer = new PeerRPCClient(link, {})
 peer.init()
 
-
 // Mocking a CLI input for an order
 const order = {
     id: crypto.randomBytes(16).toString('hex'),
     symbol: 'BTC/USD',
-    price: 50000,
-    amount: 0.5,
-    side: 'buy', // or 'sell'
+    price: 50000 + (Math.random() * 100),
+    amount: 1.5,
+    side: Math.random() > 0.5 ? 'buy' : 'sell',
     timestamp: Date.now()
 }
-console.log('Submitting order to the P2P network:', order)
 
-// The service name we will announce in the Peer
-const SERVICE_NAME = 'order_book_api'
+console.log('Sending Order:', order)
 
-peer.request(SERVICE_NAME, order, { timeout: 10000 }, (err, data) => {
+peer.request(ORDER_BOOK_RPC, order, { timeout: 10000 }, (err, data) => {
     if (err) {
-        console.error('Order submission failed:', err.message)
+        console.error(err)
         process.exit(1)
     }
-
-    console.log('Response from Peer:', data)
+    console.log('Response:', data)
     process.exit(0)
 })
