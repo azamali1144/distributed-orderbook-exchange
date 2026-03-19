@@ -1,7 +1,7 @@
 # Distributed P2P Order Book Exchange
 
 A decentralized, peer-to-peer order matching engine built on top of the
-[Grenache](https://github.com/bitfinexcom/grenache) networking framework
+Grenache networking framework
 by Bitfinex. Each node in the network maintains its own synchronized
 order book and communicates with other nodes via a Distributed Hash
 Table (DHT) and Gossip (Pub/Sub) protocol.
@@ -42,7 +42,7 @@ npm install -g grenache-grape
 ## Installation
 
 ### 1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/distributed-p2p-orderbook.git
+git clone https://github.com/azamali1144/distributed-orderbook-exchange
 
 ### 2. Navigate into the project
 cd distributed-p2p-orderbook
@@ -58,11 +58,11 @@ cp .env.example .env
 ## Configuration
 Edit your .env file:
 ### Grape DHT URL
-GRAPE_URL=http://127.0.0.1:30001
+GRPES_BASE_URL=http://127.0.0.1:30001
 
 ### Base RPC Port for peer nodes
 ### Each instance will pick a random offset from this base
-BASE_RPC_PORT=10001
+GRPES_PORT=10001
 
 ---
 

@@ -1,33 +1,74 @@
 'use strict'
 
-const { PeerRPCClient } = require('grenache-nodejs-ws')
-const Link = require('grenache-nodejs-link')
-const crypto = require('crypto')
-const { ORDER_BOOK_RPC } = require('./src/constants')
+require('dotenv').config();
+const crypto = require('crypto');
+const Link = require('grenache-nodejs-link');
+const { PeerRPCClient } = require('grenache-nodejs-ws');
+const {SERVICE_BASE_NAME} = require("./src/constants");
 
-const link = new Link({ grape: 'http://127.0.0.1:30001' })
-link.start()
+class OrderBookClient {
+    constructor(config) {
+        this.lnk = new Link({ grape: config.grape, timeout: config.timeout });
+        this.peerRpcClient = new PeerRPCClient(this.lnk, {});
 
-const peer = new PeerRPCClient(link, {})
-peer.init()
+        // Parse command line args
+        const [symbol, price, amount, side] = process.argv.slice(2);
 
-// Mocking a CLI input for an order
-const order = {
-    id: crypto.randomBytes(16).toString('hex'),
-    symbol: 'BTC/USD',
-    price: 50000 + (Math.random() * 100),
-    amount: 1.5,
-    side: Math.random() > 0.5 ? 'buy' : 'sell',
-    timestamp: Date.now()
+        this.order = {
+            id: crypto.randomBytes(8).toString('hex'),
+            symbol: symbol || 'BTC/USD',
+            price: parseFloat(price) || 50000,
+            amount: parseFloat(amount) || 0.1,
+            side: side || 'buy',
+            timestamp: Date.now()
+        };
+    }
+
+    init() {
+        this.lnk.start();
+        this.peerRpcClient.init();
+
+        // Submit order
+        setTimeout(() => {
+            console.log(`\n[Client] Submitting: ${this.order.side.toUpperCase()} ${this.order.amount} ${this.order.symbol} @ $${this.order.price}\n`);
+            this.submitOrder(this.order);
+        }, 1500);
+    }
+
+    submitOrder(order) {
+        console.log(`[Client] Looking for available peers...`);
+
+        this.peerRpcClient.request(SERVICE_BASE_NAME, order, { timeout: parseInt(process.env.ORDER_BOOK_SERVICE_TIMEOUT) || 10000 }, (err, result) => {
+                if (err) {
+                    if (err.message === 'ERR_GRAPE_LOOKUP_EMPTY') {
+                        console.error('[Error] No peers online. Retrying in 2 seconds...');
+                        setTimeout(() => this.submitOrder(order), 2000);
+                        return;
+                    }
+
+                    if (err.code === 'ECONNREFUSED' || err.message === 'ERR_TIMEOUT') {
+                        console.warn('[Retry] Peer unreachable. Trying another...');
+                        this.submitOrder(order);
+                        return;
+                    }
+
+                    console.error('[Error] Order submission failed:', err.message);
+                    return;
+                }
+
+                console.log(`[Success] Order accepted!`);
+                console.log(`result: ${JSON.stringify(result, null, 2)}`);
+                console.log(`Peer: ${result.peer}`);
+                console.log(`Matches: ${result.matches}\n`);
+            }
+        );
+    }
+
 }
 
-console.log('Sending Order:', order)
+const client = new OrderBookClient({
+    grape: `${process.env.GRPES_BASE_URL}:${process.env.GRPES_PORT}`,
+    timeout: parseInt(process.env.GRPES_TIMEOUT)
+});
 
-peer.request(ORDER_BOOK_RPC, order, { timeout: 10000 }, (err, data) => {
-    if (err) {
-        console.error(err)
-        process.exit(1)
-    }
-    console.log('Response:', data)
-    process.exit(0)
-})
+client.init();
